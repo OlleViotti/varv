@@ -614,7 +614,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 20 Nov 15:50</p>
+  <p class="ver">Varv one, build 23 Nov 13:45</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -3148,7 +3148,12 @@ function trackPane(t) {
   };
   const srcPage = () => {
       if (smp) { const cp = el('button', 'cr act'); cp.append(el('span', '', 'New track with this sample')); cp.firstChild.append(el('small', '', 'Same sample and all track settings, without the laps.')); cp.addEventListener('click', () => copySampler(t)); return [...sampleMain(t), el('h3', '', 'Sample library'), libSaveCard(t), card(cp)]; }
-      return mic.length ? [card(el('p', 'cnote', 'A microphone track has no sample: its sound is its takes, under Laps. An empty track can record a sample with its microphone button and become a sampler.'))] : [emptySampleCard(t)];
+      if (mic.length) {                               // as New track with this sample on a sampler: a new sampler track from one of the takes
+        const ks2 = mic.filter(k => k.raw && k.filled).map(k => [k, t.takes.indexOf(k) + 1]).reverse();
+        return [card(el('p', 'cnote', 'A microphone track has no sample: its sound is its takes, under Laps.'),
+          ...ks2.map(([k, n]) => { const b = el('button', 'cr act'); b.append(el('span', '', 'New sampler track from take ' + n)); b.firstChild.append(el('small', '', 'The take as recorded becomes the sample of a new track, trimmed to its sound; trim it further there.')); b.addEventListener('click', () => samplerFromTake(t, k)); return b; }))];
+      }
+      return [emptySampleCard(t)];
   };
   const PAGES = {
     source: () => {
@@ -3184,7 +3189,7 @@ function trackPane(t) {
     source: changedIn.source(t), shape: changedIn.shape(t), pitch: changedIn.spitch(t) || changedIn.tune(t), tricks: changedIn.edits(t), laps: changedIn.takes(t) || changedIn.track(t),
     mix: changedIn.mix(t), eq: eqChanged(t, 'filt'), drive: !!t.dist, fx: changedIn.colour(t) || changedIn.space(t), xy: changedIn.xy(t) };
   const [tb, ...pg] = tilePages(t.ink, [
-    ['Sound edits: change the ' + (smp ? 'sample' : 'recordings'), [['source', 'Source', !smp && mic.length > 0], ['shape', 'Shape'], ['pitch', 'Pitch'], ['tricks', 'Tricks'], ['laps', 'Laps']]],
+    ['Sound edits: change the ' + (smp ? 'sample' : 'recordings'), [['source', 'Source'], ['shape', 'Shape'], ['pitch', 'Pitch'], ['tricks', 'Tricks'], ['laps', 'Laps']]],
     ['Live effects: on what plays', [['mix', 'Mix'], ['eq', 'EQ'], ['drive', 'Drive'], ['fx', 'Effects'], ['xy', 'XY pad']]]],
     on, PAGES, smp && performance.now() - (t.sample.at || 0) < MEM_MS ? 'source' : null);
   const stick = el('div', 'estick tk'); stick.style.setProperty('--ink', t.ink); stick.append(tb); p.append(stick, ...pg);
@@ -3417,6 +3422,13 @@ function compCard(t) {
     res, el('p', 'cnote', 'It looks ahead, so nothing slips through: Attack is how smoothly it pulls down before a loud part, Release how fast it lets go. ' + (s ? 'For a harder attack, use Punch in the envelope. ' : '') + 'Gain adds to or takes away from the level after compressing.'));
 }
 /* A new track with the same sample and all its settings, but none of the laps. */
+/* A new sampler track whose sample is a microphone take, as recorded (before the track's edits and effects). */
+function samplerFromTake(t, k) {
+  const d = clamp(latN(k.lat), 0, MAXLAT), n = Math.min(len0Of(k), k.filled - d); if (n < 256) { toast('That take is too short.'); return; }
+  const u = newTrack({}, tracks.indexOf(t) + 1);
+  setSample(u, k.raw.slice(d, d + n));
+  selectTrack(u.id); toast(u.name + ': a sampler with take ' + (t.takes.indexOf(k) + 1) + ' of track ' + (tracks.indexOf(t) + 1) + ' as its sample.');
+}
 function copySampler(t) {
   const s = t.sample; if (!s) return;
   const u = newTrack(Object.assign({}, pick(t, TRACK_KEYS), { mute: false, solo: false }), tracks.indexOf(t) + 1);
