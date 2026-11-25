@@ -218,6 +218,11 @@ body[data-pads] #backT{display:block}
 .tile.on::after{content:'';position:absolute;top:5px;right:6px;width:7px;height:7px;border-radius:50%;background:#9db8ff}
 .tile.dim{opacity:.45}
 .tnone{text-align:center;margin-top:18px}
+.accg{display:flex;flex-wrap:wrap;gap:6px;padding:4px 14px 2px}
+.acc{width:38px;height:38px;border-radius:8px;font-size:13px;font-weight:700;background:var(--raise);color:var(--mut)}
+.acc.a1{background:color-mix(in srgb,var(--amber) 45%,var(--raise));color:#1b1f2e}
+.acc.a2{background:var(--amber);color:#1b1f2e}
+.acc.a3{background:transparent;box-shadow:inset 0 0 0 1.5px var(--line);color:var(--line)}
 .librow{gap:6px}
 .libname{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;text-align:left;font-weight:600;font-size:16px;color:var(--text)}
 .libname small{font-size:12px;font-weight:500;color:var(--mut)}
@@ -566,6 +571,8 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
       <div class="cr"><span>Tempo</span><div class="pill" id="bpmStep"><button class="sbtn" data-d="-1" aria-label="Slower">−</button><output id="bpmVal"></output><button class="sbtn" data-d="1" aria-label="Faster">+</button></div></div>
       <button class="cr act" id="tapBtn"><span>Tap tempo</span></button>
       <div class="cr"><span>Beats per bar</span><div class="pill" id="beatsStep"><button class="sbtn" data-d="-1" aria-label="Fewer">−</button><output id="beatsVal"></output><button class="sbtn" data-d="1" aria-label="More">+</button></div></div>
+      <div class="cr"><span>Accents</span><div id="accSw"></div></div>
+      <div id="accBox" hidden><div class="accg" id="accGrid"></div><p class="cnote">Each square is a beat of the bar, as counted by Beats per bar. Tap to step it through normal, medium, strong and silent. For 7/8 + 3/4, set 13 beats and mark 1, 3, 5, 8, 10 and 12, with tempo in eighths.</p></div>
       <div class="cr"><span>Bars per lap</span><div class="pill" id="barsStep"><button class="sbtn" data-d="-1" aria-label="Fewer">−</button><output id="barsVal"></output><button class="sbtn" data-d="1" aria-label="More">+</button></div></div>
     </div>
     <p class="cnote" id="freeNote" hidden></p>
@@ -614,7 +621,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 23 Nov 13:45</p>
+  <p class="ver">Varv one, build 25 Nov 19:45</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -1045,11 +1052,36 @@ function keepMic(force) {
 }
 
 /* ---------- transport ---------- */
+const accOf = j => { const a = st.acc || []; return a[j] != null ? a[j] : j === 0 ? 2 : 0; };
+/* The click again, at the same point of the loop, when the accents change while playing. */
+function refreshClick() {
+  if (!running || !clickSrc || isFree()) return;
+  const at = nowF() + Math.round(0.03 * sr), s2 = ctx.createBufferSource(); s2.buffer = buildClick(); s2.loop = true; s2.connect(clickGain);
+  s2.start(at / sr, ((((at - epoch) % L) + L) % L) / sr);
+  try { clickSrc.stop(at / sr); } catch (e) {}
+  clickSrc = s2;
+}
+function drawAcc() {
+  swtch($('#accSw'), () => !!st.accOn, v => { st.accOn = v; if (v && !st.acc) st.acc = []; save(); markDirty(); drawAcc(); refreshClick(); }, false);
+  const box = $('#accBox'); box.hidden = !st.accOn; if (!st.accOn) return;
+  const g = $('#accGrid'); g.textContent = '';
+  for (let j = 0; j < st.beats; j++) {
+    const v = accOf(j), b = el('button', 'acc a' + v, String(j + 1));
+    b.setAttribute('aria-label', 'Beat ' + (j + 1) + ': ' + ['normal', 'medium', 'strong', 'silent'][v]);
+    b.addEventListener('click', () => { const a = (st.acc || []).slice(); for (let i = 0; i < st.beats; i++) if (a[i] == null) a[i] = accOf(i); a[j] = (accOf(j) + 1) % 4; st.acc = a; save(); markDirty(); drawAcc(); refreshClick(); });
+    g.append(b);
+  }
+}
 function buildClick() {
   const tot = st.bars * st.beats, b = ctx.createBuffer(1, L, sr), d = b.getChannelData(0), n = Math.round(0.035 * sr);
   for (let j = 0; j < tot; j++) {
     const p = Math.round(j * L / tot);
-    const first = j === 0, bar = j % st.beats === 0, f = first ? 1760 : bar ? 1320 : 880, a = first ? 1 : bar ? 0.8 : 0.5;
+    const first = j === 0, bar = j % st.beats === 0;
+    let f = first ? 1760 : bar ? 1320 : 880, a = first ? 1 : bar ? 0.8 : 0.5;
+    if (st.accOn) {                                  // accents set by hand: strong, medium, normal or silent, per beat of the bar
+      const v = accOf(j % st.beats); if (v === 3) continue;
+      f = v === 2 ? (first ? 1760 : 1320) : v === 1 ? 1100 : 880; a = v === 2 ? (first ? 1 : 0.8) : v === 1 ? 0.65 : 0.5;
+    }
     for (let i = 0; i < n && p + i < L; i++) d[p + i] += a * Math.sin(2 * Math.PI * f * i / sr) * Math.exp(-i / (0.006 * sr));
   }
   return b;
@@ -4147,7 +4179,7 @@ async function saveProject() {
   if (!project) return false;
   dirty = false;
   const pid = project.id, keep = new Set(), puts = [];
-  const meta = { id: pid, name: project.name, saved: Date.now(), sr, bpm: st.bpm, beats: st.beats, bars: st.bars, lenMode: st.lenMode, freeLen: freeL / sr, fx: pick(st, FX_KEYS),
+  const meta = { id: pid, name: project.name, saved: Date.now(), sr, bpm: st.bpm, beats: st.beats, bars: st.bars, accOn: !!st.accOn, acc: st.acc || null, lenMode: st.lenMode, freeLen: freeL / sr, fx: pick(st, FX_KEYS),
     scenes: JSON.parse(JSON.stringify(scenes)),
     tracks: tracks.map(t => Object.assign(pick(t, TRACK_KEYS), { key: t.key, name: t.name, auto: t.auto,
       sample: (s => {                                     // the sample's raw recording is stored like a take's
@@ -4219,7 +4251,7 @@ async function openProject(id) {
   let meta; try { meta = await dbGet('projects', id); } catch (e) {}
   if (!meta) { toast('That project could not be read.'); return; }
   await leaveProject(); stop(); clearAll();
-  Object.assign(st, { bpm: meta.bpm, beats: meta.beats, bars: meta.bars, lenMode: meta.lenMode || 'bars' }, EQ_DEF, meta.fx || {}); save();
+  Object.assign(st, { bpm: meta.bpm, beats: meta.beats, bars: meta.bars, accOn: !!meta.accOn, acc: meta.acc || null, lenMode: meta.lenMode || 'bars' }, EQ_DEF, meta.fx || {}); save(); drawAcc();
   freeL = st.lenMode === 'free' && meta.freeLen ? Math.round(meta.freeLen * sr) : 0;
   L = loopFrames(); ensureRing(); buildRuler(); setRevSize(); applyGlobalFx(); drawLenSeg();
   const ratio = sr / (meta.sr || sr), same = Math.abs(ratio - 1) < 1e-6;
@@ -4489,7 +4521,7 @@ let tempoT = 0, tempoAt = null;
 function setTempo(fn) {
   if (rec || defining || measuring || srec) { toast('Change the tempo when nothing is recording.'); return; }
   if (tempoAt == null) tempoAt = st.bpm;
-  fn(); st.bpm = clamp(Math.round(st.bpm), 40, 240); save(); ui();
+  fn(); st.bpm = clamp(Math.round(st.bpm), 20, 480); save(); ui();
   clearTimeout(tempoT); tempoT = setTimeout(applyTempo, 700);
 }
 function applyTempo() {
@@ -4601,7 +4633,7 @@ function setBarsBeats(fn) {
   fn(); save(); L = loopFrames(); buildRuler(); if (ctx) applyGlobalFx(); ui(); markDirty();
   if (running) { stop(); start(false); }
 }
-for (const b of document.querySelectorAll('#beatsStep .sbtn')) hold(b, () => setBarsBeats(() => { st.beats = clamp(st.beats + +b.dataset.d, 1, 16); }));
+for (const b of document.querySelectorAll('#beatsStep .sbtn')) hold(b, () => setBarsBeats(() => { st.beats = clamp(st.beats + +b.dataset.d, 1, 32); drawAcc(); }));
 for (const b of document.querySelectorAll('#barsStep .sbtn')) hold(b, () => setBarsBeats(() => { st.bars = clamp(st.bars + +b.dataset.d, 1, 32); }));
 function drawLenSeg() {
   seg($('#lenSeg'), [['bars', 'Bars'], ['free', 'Free']], () => st.lenMode, v => {
@@ -4609,7 +4641,7 @@ function drawLenSeg() {
     stop(); st.lenMode = v; freeL = 0; save(); L = loopFrames(); buildRuler(); for (const t of tracks) drawLane(t); renderPane(); ui();
   }, 'bars');
 }
-drawLenSeg();
+drawLenSeg(); drawAcc();
 
 dbl($('#bpmVal'), () => setTempo(() => { st.bpm = 100; }));
 dbl($('#beatsVal'), () => setBarsBeats(() => { st.beats = 4; }));
