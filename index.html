@@ -625,7 +625,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 26 Nov 11:55</p>
+  <p class="ver">Varv one, build 26 Nov 12:10</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -4627,7 +4627,9 @@ pressable($('#undoBtn'), undoLast, openHistory, true);
 $('#capBtn').addEventListener('click', capturePrev);
 /* Click: tap turns it on or off; hold opens Loop and click (tempo, beats, bars, click) right here, over whatever is on
    screen, the pads included. The settings are the same ones as in Settings, moved over while the panel is open. */
-$('#loopBtn').addEventListener('click', () => { if (!$('#quick').hidden && $('#quickIn').contains($('#loopBox'))) closeQuick(); else openQuick(); });   // the circle: loop and click, again to close
+$('#loopBtn').addEventListener('click', () => {   // the circle closes whatever is open (a panel, the pads, Edit or Settings); with nothing open, it opens loop and click
+  if (!$('#quick').hidden) closeQuick(); else if (padT) closePads(); else if (mode !== 'play') setMode('play'); else openQuick();
+});
 /* A panel above the transport bar, over whatever is on screen: Loop and click (the circle in the bar), the record options (hold
    Record) and the undo history (hold Undo). The transport stays usable; a tap outside or Done closes it. */
 let quickClose = null, quickFill = null;
