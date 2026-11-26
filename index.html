@@ -625,7 +625,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 26 Nov 14:40</p>
+  <p class="ver">Varv one, build 26 Nov 15:00</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -705,7 +705,7 @@ const TRACK_DEF = Object.assign({ vol: 1, pan: 0, filt: 0, echo: 0, rev: 0, mute
   xyMap: XY_DEF, xyHold: false,
   ebrk: 0, rbrk: 0, frz: 0, phone: 0, radio: 0, isoL: 0, isoM: 0, isoH: 0, slice: 0, sPos: 0, sLen: 0.5, rdly: 0, ping: 0, pDiv: 0.5,
   lCrush: 0, lRing: 0, lRingF: 0.5, lTrem: 0, lTremF: 0.4,
-  comp: null }, EQ_DEF);   // a microphone track's compressor, worked out on each take (a sampler's is in its sample)   // the live bit crush, ring mod and tremolo (the XY pad's), set by hand   // live tricks   // sound tricks: speed (0.5, 1, 2), tape stop, tremolo (notes per beat, depth, gate), lo-fi   // distortion: on, type, drive, tone, mix, level   // sampler: octaves shown (0 = one big pad), lowest octave, notes held or full length
+  comp: null, fmul: 1 }, EQ_DEF);   // a microphone track's compressor, worked out on each take (a sampler's is in its sample)   // the live bit crush, ring mod and tremolo (the XY pad's), set by hand   // live tricks   // sound tricks: speed (0.5, 1, 2), tape stop, tremolo (notes per beat, depth, gate), lo-fi   // distortion: on, type, drive, tone, mix, level   // sampler: octaves shown (0 = one big pad), lowest octave, notes held or full length
 const TRACK_KEYS = Object.keys(TRACK_DEF);
 const isSmp = t => !!t.sample;                       // a sampler when it holds a sample, a microphone track when it holds recordings
 const OD_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="14" r="6.5"/><path d="M19 2.5v8M15 6.5h8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>';
@@ -733,7 +733,8 @@ const len0Of = k => k.len0 || k.len;
 const takeBars = k => Math.max(1, Math.round(len0Of(k) / (st.beats * 60 / (k.bpm0 || st.bpm) * sr)));
 const loopFrames = () => isFree() ? freeL : barsLen(st.bars);
 const trackBars = t => t.bars || st.bars;
-const trackLen = t => isFree() ? freeL : barsLen(trackBars(t));
+const FMULS = [0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8];   // free mode: a track's length in loops (the first recording sets one loop)
+const trackLen = t => isFree() ? Math.round(freeL * (t.fmul || 1)) : barsLen(trackBars(t));
 const echoSec = () => clamp(st.echoDiv === 'free' ? st.echoMs / 1000 : st.echoDiv * 60 / st.bpm, 0.02, 2.9);
 const bq = (type, f) => { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = 0.9; return b; };
 const gn = v => { const g = ctx.createGain(); g.gain.value = v; return g; };
@@ -932,7 +933,7 @@ registerProcessor('varv-guards',GN)`;
    last needs the one before), so a track longer than the loop is not cut short at its start. When it grows, what is
    in it is kept. */
 function ensureRing(min) {
-  let Lmax = L; for (const t of tracks) if (!isFree()) Lmax = Math.max(Lmax, trackLen(t));
+  let Lmax = L; for (const t of tracks) if (!isFree() || freeL) Lmax = Math.max(Lmax, trackLen(t));
   const need = Math.max(12 * sr, 2 * Lmax + 4 * sr + MAXLAT, min || 0) | 0;
   if (ring && R >= need) return;
   if (!ring) { ring = new Float32Array(need); R = need; capFirst = -1; return; }
@@ -1248,6 +1249,7 @@ function endDefine() {
   if (len < 0.3 * sr) { wake(false); toast('Too short, try again.'); ui(); return; }
   freeL = len; L = len; epoch = T0; running = true; runId++; rec = null; recTail = { start: 0, end: len }; livePass = null; clickSrc = null;
   const t = tracks.find(x => x.id === defineInto) || targetTrack(); defineInto = null;
+  if (t) t.fmul = 1;                                 // the first recording is one loop
   addTake({ tid: t ? t.id : null, len, k: 0 }, false, 0);
   buildRuler(); ui(); markDirty(); tick();
 }
@@ -2714,8 +2716,9 @@ function drawHead(t) {
   if (!t.row) return;
   const n = t.takes.filter(k => k.started).length, pend = t.takes.length > n;
   const no = tracks.indexOf(t) + 1; t.name = 'Track ' + no;                 // tracks are numbered by their place, not named
-  $('.tname b', t.row).textContent = no; $('.tno', t.row).textContent = no + (!isFree() && trackBars(t) !== st.bars ? ' · ' + trackBars(t) + (trackBars(t) === 1 ? ' bar' : ' bars') : '');
-  t.row.classList.toggle('lenok', !t.takes.length && !isFree());
+  const fm = t.fmul || 1, fmTxt = fm === 0.25 ? '¼ loop' : fm === 0.5 ? '½ loop' : fm + ' loops';
+  $('.tname b', t.row).textContent = no; $('.tno', t.row).textContent = no + (isFree() ? (fm !== 1 ? ' · ' + fmTxt : '') : trackBars(t) !== st.bars ? ' · ' + trackBars(t) + (trackBars(t) === 1 ? ' bar' : ' bars') : '');
+  t.row.classList.toggle('lenok', !t.takes.length && (!isFree() || !!freeL));
   const queued = (recInto(t) && running && heardPos() < rec.k * rec.len) || (defining && defineInto === t.id);
   const into = recInto(t) && !queued;
   $('.tname small', t.row).textContent = pend || into || (defining && defineInto === t.id) ? (rec && rec.cont && recInto(t) ? 'auto' : 'recording') : queued ? (rec && rec.cont ? 'auto' : 'next lap') : armedId === t.id ? 'armed' : t.solo ? 'solo' : isSmp(t) ? (!t.sample ? 'no sample' : pitchTxt(t) || (t.sample.det != null || t.sample.adj ? midiName(sRoot(t)) : 'sample')) + (n ? ', ' + n + (n > 1 ? ' laps' : ' lap') : '') : !n ? 'empty' : pitchTxt(t) || (n > 1 ? n + ' takes' : '');
@@ -2812,8 +2815,8 @@ function restoreAt(i) {
   if (isFree()) {                                    // free mode: what is brought back sets the loop again, or must fit the one there is
     const recs = it.clear ? it.takes : it.take ? [it.take] : it.track ? it.track.takes : [];
     if (recs.length) {
-      if (!freeL && !allTakes().length) { stop(); freeL = L = recs[0].len; buildRuler(); }
-      else if (recs.some(k => k.len !== freeL)) { toast('That recording does not fit the loop recorded since, so it cannot be brought back.'); return; }
+      if (!freeL && !allTakes().length) { stop(); freeL = L = Math.round(recs[0].len / (it.track && it.track.fmul || 1)); buildRuler(); }
+      else if (recs.some(k => k.len !== Math.round(freeL * (k.track.fmul || 1)))) { toast('That recording does not fit the loop recorded since, so it cannot be brought back.'); return; }
     }
   }
   trash.splice(i, 1);
@@ -3785,7 +3788,15 @@ function tuneCard(t) {
     el('p', 'cnote', 'The key is what you hear, after any transposing. Speed is how fast a note is pulled in: hard gives the robotic effect, slower keeps vibrato and slides. Penta is the major pentatonic; for minor pentatonic choose its relative major (A minor: C).'));
 }
 function stepTrackBars(t, d) {
-  if (t.takes.length || isFree()) return;
+  if (t.takes.length) return;
+  if (isFree()) {                                    // free: ¼, ½, 1, 2, 3 … 8 loops
+    if (!freeL) { toast('Record the first loop, then set other tracks in loops of it.'); return; }
+    const i = FMULS.indexOf(t.fmul || 1), j = clamp((i < 0 ? 2 : i) + d, 0, FMULS.length - 1);
+    if (FMULS[j] === (t.fmul || 1)) { toast(d < 0 ? 'A quarter loop is as short as it goes.' : '8 loops is as long as it goes.'); return; }
+    t.fmul = FMULS[j]; touched(t); if (ctx) ensureRing();
+    if (rec && rec.tid === t.id) { const p = heardPos(); if (p < rec.k * rec.len) { rec.len = trackLen(t); rec.k = Math.max(0, Math.ceil(Math.max(p, 0) / rec.len)); } }
+    drawHead(t); drawLane(t); refreshPane(t); markDirty(); ui(); return;
+  }
   const L0 = st.bars, cur = trackBars(t);
   let b = d > 0 ? (cur >= L0 ? cur + L0 : cur * 2) : (cur > L0 ? cur - L0 : cur % 2 === 0 ? cur / 2 : cur);
   if (b === cur) { toast(cur + (cur === 1 ? ' bar' : ' bars') + ' is as short as it goes.'); return; }
@@ -4333,7 +4344,7 @@ async function openProject(id) {
     for (const km of tm.takes || []) {
       if (km.notes) {                                     // a lap of notes: rendered from the sample once it is ready
         if (!t.sample || (isFree() && !freeL)) { missing++; continue; }
-        const nb = km.bars || tm.bars || meta.bars, b0 = km.bpm0 || meta.bpm, len = isFree() ? freeL : barsLen(nb), len0 = isFree() ? freeL : Math.round(nb * st.beats * 60 / b0 * sr);
+        const nb = km.bars || tm.bars || meta.bars, b0 = km.bpm0 || meta.bpm, len = isFree() ? Math.round(freeL * (tm.fmul || 1)) : barsLen(nb), len0 = isFree() ? Math.round(freeL * (tm.fmul || 1)) : Math.round(nb * st.beats * 60 / b0 * sr);
         t.takes.push({ id: ++uid, key: km.key, k: -1, len, len0, bpm0: b0, run: -1, F0: 0, rawStart: 0, raw: null, span: len + MAXLAT + 8, sig: '', off: !!km.off, pin: !!km.pin, solo: !!km.solo,
           notes: km.notes.map(([p, n, o]) => ({ A: Math.round(p * ratio), n, O: o == null ? null : Math.round(o * ratio), tid: t.id })),
           filled: 0, lat: km.lat, reverse: false, norm: 1, peak: 0, peaks: null, buf: null, src: null, tg: null,
@@ -4343,7 +4354,7 @@ async function openProject(id) {
       let raw = null; try { raw = await dbGet('audio', id + '/' + km.key); } catch (e) {}
       if (!raw || (isFree() && !freeL)) { missing++; continue; }
       if (!same) raw = resample(raw, ratio);
-      const nb = km.bars || tm.bars || meta.bars, b0 = km.bpm0 || meta.bpm, len = isFree() ? freeL : barsLen(nb), len0 = isFree() ? freeL : Math.round(nb * st.beats * 60 / b0 * sr);
+      const nb = km.bars || tm.bars || meta.bars, b0 = km.bpm0 || meta.bpm, len = isFree() ? Math.round(freeL * (tm.fmul || 1)) : barsLen(nb), len0 = isFree() ? Math.round(freeL * (tm.fmul || 1)) : Math.round(nb * st.beats * 60 / b0 * sr);
       const k = { id: ++uid, key: km.key, k: -1, len, len0, bpm0: b0, run: -1, F0: 0, rawStart: 0, raw, filled: raw.length, lat: km.lat, trim: km.trim || 0, trimLen0: km.trimLen0 || null, off: !!km.off, pin: !!km.pin, solo: !!km.solo, od: !!km.od, reverse: !!km.reverse,
         norm: km.norm == null ? null : km.norm, peak: 0, peaks: null, buf: null, src: null, tg: null,
         final: true, started: true, full: true, auto: false, track: t, savedTo: same ? id : null };
@@ -4600,7 +4611,7 @@ function applyTempo() {
   let audio = 0, far = 0;
   for (const k of new Set(ks)) {
     if (!k.bpm0) { k.bpm0 = from; k.len0 = k.len; }          // a take from before: recorded at the earlier tempo
-    k.len = isFree() ? freeL : barsLen(takeBars(k)); k.final = false;
+    k.len = isFree() ? trackLen(k.track) : barsLen(takeBars(k)); k.final = false;
     if (!k.notes) { audio++; far = Math.max(far, Math.abs(st.bpm / k.bpm0 - 1)); k.buf = null; }   // silent until it is stretched anew
   }
   for (const t of tracks) drawLane(t);
