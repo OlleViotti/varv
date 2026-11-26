@@ -625,7 +625,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 26 Nov 12:10</p>
+  <p class="ver">Varv one, build 26 Nov 14:20</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -1251,9 +1251,10 @@ function endDefine() {
   addTake({ tid: t ? t.id : null, len, k: 0 }, false, 0);
   buildRuler(); ui(); markDirty(); tick();
 }
-/* In free mode the length is released again once nothing is left that could need it. */
+/* In free mode the length is released again as soon as no recording is left in use (removed ones waiting in the
+   undo bar do not hold it), so the next recording sets a new length, free of the old one. */
 function releaseFree() {
-  if (!isFree() || !freeL || locked()) return;
+  if (!isFree() || !freeL || locked() || defining) return;
   stop(); freeL = 0; L = 0; buildRuler(); ui();
 }
 
@@ -2779,14 +2780,14 @@ function removeTake(k) {
   t.takes.splice(t.takes.indexOf(k), 1);
   let idx = -1;
   if (t.auto && !t.takes.length) { idx = tracks.indexOf(t); unmountTrack(t); tracks.splice(idx, 1); }
-  trash.push({ take: k, track: t, idx }); changed(t);
+  trash.push({ take: k, track: t, idx }); changed(t); releaseFree();
 }
 function deleteTrack(t) {
   const idx = tracks.indexOf(t); unmountTrack(t); tracks.splice(idx, 1);
   for (const k of t.takes) k.savedTo = null;
   trash.push({ track: t, idx });
   if (selId === t.id) selId = (tracks[Math.min(idx, tracks.length - 1)] || {}).id || 'master';
-  changed(); renderPane();
+  changed(); renderPane(); releaseFree();
 }
 /* Empty or reset a track (see trackPane). The bar at the bottom can bring back what was removed. */
 function clearTrack(t, reset) {
@@ -2803,11 +2804,19 @@ function clearTrack(t, reset) {
     if (reset === true) Object.assign(t, TRACK_DEF);
     applyTrack(t);
   }
-  trash.push(it); changed(t); renderPane();
+  trash.push(it); changed(t); renderPane(); releaseFree();
 }
 const restoreLast = () => restoreAt(trash.length - 1);
 function restoreAt(i) {
-  const it = trash.splice(i, 1)[0]; if (!it) return;
+  const it = trash[i]; if (!it) return;
+  if (isFree()) {                                    // free mode: what is brought back sets the loop again, or must fit the one there is
+    const recs = it.clear ? it.takes : it.take ? [it.take] : it.track ? it.track.takes : [];
+    if (recs.length) {
+      if (!freeL && !allTakes().length) { stop(); freeL = L = recs[0].len; buildRuler(); }
+      else if (recs.some(k => k.len !== freeL)) { toast('That recording does not fit the loop recorded since, so it cannot be brought back.'); return; }
+    }
+  }
+  trash.splice(i, 1);
   const t = it.track;
   if (it.clear) {
     if (it.reset) { if (it.reset === true) Object.assign(t, it.settings); t.sampler = !!it.sample; if (it.sample && !t.sample) { t.sample = it.sample; it.sample.gen = 0; prepSample(t); } applyTrack(t); }
