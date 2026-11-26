@@ -625,7 +625,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 26 Nov 11:40</p>
+  <p class="ver">Varv one, build 26 Nov 11:55</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -928,10 +928,18 @@ registerProcessor('varv-guards',GN)`;
   inHP.connect(inG); inG.connect(capNode);
 }
 
+/* The capture ring holds the longest lap of any track twice over (a lap is read back once it has passed, and Capture
+   last needs the one before), so a track longer than the loop is not cut short at its start. When it grows, what is
+   in it is kept. */
 function ensureRing(min) {
-  const need = Math.max(12 * sr, 2 * L + 4 * sr + MAXLAT, min || 0) | 0;
+  let Lmax = L; for (const t of tracks) if (!isFree()) Lmax = Math.max(Lmax, trackLen(t));
+  const need = Math.max(12 * sr, 2 * Lmax + 4 * sr + MAXLAT, min || 0) | 0;
   if (ring && R >= need) return;
-  const had = !!ring; ring = new Float32Array(need); R = need; capFirst = had ? capEnd : -1;
+  if (!ring) { ring = new Float32Array(need); R = need; capFirst = -1; return; }
+  const old = ring, oR = R, from = Math.max(capFirst, capEnd - oR, 0), n = capEnd - from;
+  ring = new Float32Array(need); R = need;
+  for (let i = 0; i < n; i++) { const f = from + i; ring[f % R] = old[f % oR]; }
+  if (capFirst >= 0) capFirst = from;
 }
 const availStart = () => Math.max(capFirst, capEnd - R);
 function ringWrite(f, d) {
@@ -3751,6 +3759,7 @@ function stepTrackBars(t, d) {
 function setTrackBars(t, b, show) {
   if (t.takes.length) return;
   b = clamp(b, 1, 32); t.bars = b === st.bars ? null : b;
+  if (ctx) ensureRing();                              // room for the longer lap
   if (rec && rec.tid === t.id) { const p = heardPos(); if (p < rec.k * rec.len) { rec.len = trackLen(t); rec.k = Math.max(0, Math.ceil(Math.max(p, 0) / rec.len)); } }
   show(); drawLane(t); markDirty(); ui();
 }
