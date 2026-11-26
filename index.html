@@ -625,7 +625,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 26 Nov 14:20</p>
+  <p class="ver">Varv one, build 26 Nov 14:40</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -1273,7 +1273,7 @@ function fillRaw(k) {
 function render(k) {
   const N0 = len0Of(k); let out = k.notes ? renderNotes(k) : new Float32Array(N0);
   if (!k.notes) {
-    const d = clamp(latN(k.lat), 0, MAXLAT), raw = k.raw, filled = k.filled;
+    const d = Math.max(0, clamp(latN(k.lat), 0, MAXLAT) + (k.trim || 0)), raw = k.raw, filled = k.filled;   // trim: the first free loop, trimmed by hand
     const N = N0;
     for (let i = 0; i < N + XF; i++) {
       const ri = d + i; if (ri >= filled) break;
@@ -1610,7 +1610,7 @@ function serviceTake(k, now) {
   }
   fillRaw(k);
   if (!k.full && k.filled >= k.raw.length) { k.full = true; markDirty(); }
-  const need = Math.min(clamp(latN(k.lat), 0, MAXLAT) + k.len + XF, k.raw.length), end = k.F0 + k.len;
+  const need = Math.min(clamp(latN(k.lat), 0, MAXLAT) + (k.trim || 0) + k.len + XF, k.raw.length), end = k.F0 + k.len;
   if (!k.final && k.filled >= need) { render(k); k.final = true; afterRender(k, now, end); }
   else if (!k.started && !k.pend && now >= end - LEAD_S * sr) { render(k); afterRender(k, now, end); }
 }
@@ -3208,6 +3208,7 @@ function trackPane(t) {
   };
   const srcPage = () => {
       if (smp) { const cp = el('button', 'cr act'); cp.append(el('span', '', 'New track with this sample')); cp.firstChild.append(el('small', '', 'Same sample and all track settings, without the laps.')); cp.addEventListener('click', () => copySampler(t)); return [...sampleMain(t), el('h3', '', 'Sample library'), libSaveCard(t), card(cp)]; }
+      if (mic.length && loopTrimOK()) return [...loopTrimCards(t), card(...mic.filter(k => k.raw && k.filled).map(k => { const b = el('button', 'cr act'); b.append(el('span', '', 'New sampler track from take ' + (t.takes.indexOf(k) + 1))); b.addEventListener('click', () => samplerFromTake(t, k)); return b; }))];
       if (mic.length) {                               // as New track with this sample on a sampler: a new sampler track from one of the takes
         const ks2 = mic.filter(k => k.raw && k.filled).map(k => [k, t.takes.indexOf(k) + 1]).reverse();
         return [card(el('p', 'cnote', 'A microphone track has no sample: its sound is its takes, under Laps.'),
@@ -3410,8 +3411,9 @@ function loopView(t) {
   box.draw = draw; requestAnimationFrame(draw);
   return box;
 }
-function fineView(t, key, moved) {
-  const s = t.sample, box = el('div', 'finev'), cv = el('canvas', 'finec'), out = el('output'), W = Math.round(0.15 * sr), gap = Math.round(0.02 * sr);
+function fineView(t, key, moved, S) {
+  S = S || { obj: t.sample, edited: w => sampleEdited(t, true, w), auto: () => autoTrim(t.sample.raw) };
+  const s = S.obj, box = el('div', 'finev'), cv = el('canvas', 'finec'), out = el('output'), W = Math.round(0.15 * sr), gap = Math.round(0.02 * sr);
   box.append(cv, out);
   let c0 = s[key], act = false, lastTap = 0;                 // the close-up stays put while dragging, then centres on the edge again
   function draw() {
@@ -3435,11 +3437,11 @@ function fineView(t, key, moved) {
   const set = v => { if (key === 'a') s.a = clamp(v, 0, s.b - gap); else s.b = clamp(v, s.a + gap, s.raw.length); };
   cv.addEventListener('pointerdown', e => {
     const now = performance.now();
-    if (now - lastTap < 320) { lastTap = 0; set(autoTrim(s.raw)[key === 'a' ? 0 : 1]); act = false; draw(); moved(); sampleEdited(t, true, 0); return; }
+    if (now - lastTap < 320) { lastTap = 0; set(S.auto()[key === 'a' ? 0 : 1]); act = false; draw(); moved(); S.edited(0); return; }
     lastTap = now; act = true; x0 = e.clientX; v0 = s[key]; try { cv.setPointerCapture(e.pointerId); } catch (er) {}
   });
   cv.addEventListener('pointermove', e => { if (!act) return; set(at(e)); draw(); moved(); });
-  const up = () => { if (!act) return; act = false; draw(); sampleEdited(t, true); };
+  const up = () => { if (!act) return; act = false; draw(); S.edited(); };
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   box.draw = draw; requestAnimationFrame(draw);
   return box;
@@ -3482,6 +3484,29 @@ function compCard(t) {
     res, el('p', 'cnote', 'It looks ahead, so nothing slips through: Attack is how smoothly it pulls down before a loud part, Release how fast it lets go. ' + (s ? 'For a harder attack, use Punch in the envelope. ' : '') + 'Gain adds to or takes away from the level after compressing.'));
 }
 /* A new track with the same sample and all its settings, but none of the laps. */
+/* Free mode: the first loop, while it is the only recording, can be trimmed at both ends like a sample, to make the
+   loop exactly right. Its start and end are moved in the recording as made (with a little before and after it), and
+   the loop length follows. Double-tap for the loop as recorded. */
+const loopTrimOK = () => isFree() && !defining && allTakes().length === 1 && !allTakes()[0].notes && allTakes()[0].full;
+function loopTrimCards(t) {
+  const k = allTakes()[0]; if (!k || k.track !== t) return [];
+  const d = clamp(latN(k.lat), 0, MAXLAT), base = d + PRE, top = Math.max(base + 1, k.filled - XF - 2);
+  if (k.trimLen0 == null) k.trimLen0 = k.len;
+  const o = { raw: k.raw.subarray(0, top), a: base + (k.trim || 0), b: Math.min(top, base + (k.trim || 0) + k.len) };
+  const apply = () => {
+    o.a = Math.max(PRE, o.a); const n = o.b - o.a; if (n < 0.3 * sr) return;
+    k.trim = o.a - base; k.len = n; k.len0 = n; freeL = L = n; k.final = false; k.peaks = null;
+    buildRuler(); for (const x of tracks) drawLane(x); markDirty();
+    if (running) { stop(); start(false); }
+  };
+  let tm = 0;
+  const S = { obj: o, autoName: 'for the loop as recorded', edited: w => { clearTimeout(tm); tm = setTimeout(apply, w == null ? 150 : w); }, auto: () => [base, Math.min(top, base + k.trimLen0)] };
+  const trim = trimWidget(t, S), fa = fineView(t, 'a', () => trim.draw(), S), fb = fineView(t, 'b', () => trim.draw(), S);
+  trim.onEnd = () => { fa.draw(); fb.draw(); };
+  const fine = el('div', 'finew'); fine.append(fa, fb);
+  requestAnimationFrame(() => trim.draw());
+  return [el('h3', '', 'Loop'), card(trim, fine, el('p', 'cnote', 'The first free loop, while it is the only recording: move its start and end, closely in the two views, to make the loop exactly right. The loop length follows. Double-tap for the loop as recorded.'))];
+}
 /* A new sampler track whose sample is a microphone take, as recorded (before the track's edits and effects). */
 function samplerFromTake(t, k) {
   const d = clamp(latN(k.lat), 0, MAXLAT), n = Math.min(len0Of(k), k.filled - d); if (n < 256) { toast('That take is too short.'); return; }
@@ -3608,13 +3633,14 @@ function envWidget(t) {
   return wrap;
 }
 /* The whole recording with the kept part lit; drag either edge, double-tap for auto trim. */
-function trimWidget(t) {
-  const s = t.sample, wrap = el('div', 'trimw'), cv = el('canvas', 'trimc'), out = el('output');
+function trimWidget(t, S) {                          // S: what is trimmed, if not the sample ({ obj, edited(wait), auto() })
+  S = S || { obj: t.sample, edited: w => sampleEdited(t, true, w), auto: () => autoTrim(t.sample.raw) };
+  const s = S.obj, wrap = el('div', 'trimw'), cv = el('canvas', 'trimc'), out = el('output');
   cv.setAttribute('aria-label', 'Trim: drag the edges');
   wrap.append(cv, out);
   let W = 0, act = null, lastTap = 0;
   const n = () => s.raw.length, fx = i => i / n() * W, xi = x => Math.round(clamp(x / W, 0, 1) * n());
-  const label = () => { out.textContent = 'From ' + (s.a / sr).toFixed(2) + ' s, ' + ((s.b - s.a) / sr).toFixed(2) + ' s long. Drag the edges; double-tap for auto trim.'; };
+  const label = () => { out.textContent = 'From ' + (s.a / sr).toFixed(2) + ' s, ' + ((s.b - s.a) / sr).toFixed(2) + ' s long. Drag the edges; double-tap ' + (S.autoName || 'for auto trim') + '.'; };
   function draw() {
     const { g, w, h } = sizeCanvas(cv); W = w; if (!w) return;
     const N = n(), mid = h / 2, pk = new Float32Array(w); let top = 1e-4;
@@ -3626,7 +3652,7 @@ function trimWidget(t) {
     const xa = fx(s.a), xb = fx(s.b), base = h - 4, sc = (h - 16) / top;   // the level from the bottom up, as in the envelope (both swings of the wave in one)
     g.fillStyle = 'rgba(236,229,208,.08)'; g.fillRect(xa, 0, xb - xa, h);
     for (let x = 0; x < w; x++) { const hh = Math.max(0.6, pk[x] * sc); g.fillStyle = x >= xa && x <= xb ? '#ece5d0' : 'rgba(160,168,192,.35)'; g.fillRect(x, base - hh, 1, hh); }
-    if (t.sGate && s.loop) {                         // the sustain loop of Held notes, in the sample as it was recorded
+    if (S.obj === t.sample && t.sGate && s.loop) {                         // the sustain loop of Held notes, in the sample as it was recorded
       const r0 = s.rev ? s.a + (s.b - s.a) - s.loop.e : s.a + s.loop.s, r1 = r0 + (s.loop.e - s.loop.s);
       g.fillStyle = 'rgba(255,178,36,.35)'; g.fillRect(fx(r0), 0, fx(r1) - fx(r0), h);
       g.fillStyle = '#ffb224'; g.font = '600 11px ' + getComputedStyle(document.body).fontFamily; g.fillText('loop', fx(r0) + 3, h - 6);
@@ -3638,7 +3664,7 @@ function trimWidget(t) {
   const px = e => e.clientX - cv.getBoundingClientRect().left;
   cv.addEventListener('pointerdown', e => {
     const x = px(e), now = performance.now();
-    if (now - lastTap < 320) { lastTap = 0; [s.a, s.b] = autoTrim(s.raw); draw(); sampleEdited(t, true, 0); if (wrap.onEnd) wrap.onEnd(); return; }
+    if (now - lastTap < 320) { lastTap = 0; [s.a, s.b] = S.auto(); draw(); S.edited(0); if (wrap.onEnd) wrap.onEnd(); return; }
     lastTap = now;
     act = Math.abs(x - fx(s.a)) <= Math.abs(x - fx(s.b)) ? 'a' : 'b';
     try { cv.setPointerCapture(e.pointerId); } catch (er) {}
@@ -3649,7 +3675,7 @@ function trimWidget(t) {
     if (act === 'a') s.a = clamp(i, 0, s.b - gap); else s.b = clamp(i, s.a + gap, n());
     draw();
   });
-  const up = () => { if (!act) return; act = null; sampleEdited(t, true); if (wrap.onEnd) wrap.onEnd(); };
+  const up = () => { if (!act) return; act = null; S.edited(); if (wrap.onEnd) wrap.onEnd(); };
   cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
   wrap.draw = draw;
   return wrap;
@@ -4227,7 +4253,7 @@ async function saveProject() {
         if (k.notes) return { key: k.key, lat: k.lat, off: !!k.off, pin: !!k.pin, solo: !!k.solo, bars: isFree() ? null : takeBars(k), bpm0: k.bpm0 || st.bpm, notes: k.notes.map(e => [e.A - k.rawStart, e.n, e.O == null ? null : e.O - k.rawStart]) };
         keep.add(k.key);
         if (k.savedTo !== pid) { puts.push([pid + '/' + k.key, k.raw.slice(0, k.filled)]); k.savedTo = pid; }
-        return { key: k.key, lat: k.lat, off: !!k.off, pin: !!k.pin, solo: !!k.solo, od: !!k.od, reverse: k.reverse, norm: k.norm, bars: isFree() ? null : takeBars(k), bpm0: k.bpm0 || st.bpm };
+        return { key: k.key, lat: k.lat, off: !!k.off, pin: !!k.pin, solo: !!k.solo, od: !!k.od, reverse: k.reverse, norm: k.norm, bars: isFree() ? null : takeBars(k), bpm0: k.bpm0 || st.bpm, trim: k.trim || 0, trimLen0: k.trimLen0 || null };
       }) })) };
   const prev = saving;
   const job = (async () => {
@@ -4318,7 +4344,7 @@ async function openProject(id) {
       if (!raw || (isFree() && !freeL)) { missing++; continue; }
       if (!same) raw = resample(raw, ratio);
       const nb = km.bars || tm.bars || meta.bars, b0 = km.bpm0 || meta.bpm, len = isFree() ? freeL : barsLen(nb), len0 = isFree() ? freeL : Math.round(nb * st.beats * 60 / b0 * sr);
-      const k = { id: ++uid, key: km.key, k: -1, len, len0, bpm0: b0, run: -1, F0: 0, rawStart: 0, raw, filled: raw.length, lat: km.lat, off: !!km.off, pin: !!km.pin, solo: !!km.solo, od: !!km.od, reverse: !!km.reverse,
+      const k = { id: ++uid, key: km.key, k: -1, len, len0, bpm0: b0, run: -1, F0: 0, rawStart: 0, raw, filled: raw.length, lat: km.lat, trim: km.trim || 0, trimLen0: km.trimLen0 || null, off: !!km.off, pin: !!km.pin, solo: !!km.solo, od: !!km.od, reverse: !!km.reverse,
         norm: km.norm == null ? null : km.norm, peak: 0, peaks: null, buf: null, src: null, tg: null,
         final: true, started: true, full: true, auto: false, track: t, savedTo: same ? id : null };
       render(k); t.takes.push(k); attachTake(k);
