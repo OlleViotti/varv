@@ -136,6 +136,10 @@ body.s-rec .mtr{background:rgba(0,0,0,.25)}
 [data-mode=edit] .track.sel.armed .tname{box-shadow:inset 5px 0 0 var(--rec),inset 0 0 0 2px var(--amber)}
 .track .trk{min-height:52px;background:var(--wave);border-radius:10px;cursor:pointer;transition:opacity .15s}
 .trk .tno{position:absolute;left:8px;top:5px;font:700 13px/1 var(--ui);color:var(--ink);pointer-events:none}
+.trk .tlen{position:absolute;bottom:4px;width:30px;height:26px;border-radius:7px;display:none;place-items:center;font:700 17px/1 var(--ui);color:var(--ink);background:rgba(0,0,0,.25);z-index:2}
+.trk .tlen.lminus{left:4px}.trk .tlen.lplus{right:4px}
+.lenok .trk .tlen{display:grid}
+[data-mode=edit] .trk .tlen{display:none}
 [data-mode=edit] .trk .tno{display:none}
 .track .tname .kbi{display:none;position:absolute;right:2px;top:2px;width:30px;height:30px;place-items:center;color:var(--amber)}
 .track .tname .kbi svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2}
@@ -621,7 +625,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 25 Nov 19:45</p>
+  <p class="ver">Varv one, build 26 Nov 11:40</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -2625,6 +2629,12 @@ function mountTrack(t, idx) {
   t.bS = sg('so', 'Solo', () => toggleSolo(t));
   const trk = el('div', 'trk slide');
   t.cv = el('canvas'); trk.append(t.cv, el('i', 'ph'), el('span', 'tno'), el('em', '', 'muted'));
+  /* − and + in the strip's lower corners, on a track without recordings: its length in steps of the loop (2, 4, 6, 8
+     bars on a 2-bar loop), and below the loop halved (1 bar). Its length shows by the number. */
+  const lb = (cls, label, d) => { const b = el('button', 'tlen ' + cls, label); b.setAttribute('aria-label', d < 0 ? 'Shorter' : 'Longer');
+    b.addEventListener('pointerdown', e => e.stopPropagation());
+    b.addEventListener('click', e => { e.stopPropagation(); if (mode !== 'play') return; stepTrackBars(t, d); }); trk.append(b); };
+  lb('lminus', '−', -1); lb('lplus', '+', 1);
   /* On the right: sample (or keys on a sampler) and record. */
   const bs = el('div', 'tbs'), mk = (cls, label, html, fn) => { const b = el('button', 'tb ' + cls); b.setAttribute('aria-label', label); b.innerHTML = html; b.addEventListener('click', () => { if (mode === 'play') fn(); }); bs.append(b); return b; };
   t.bX = mk('sx', 'Record a sample', MIC_ICON, () => sampleButton(t));
@@ -2695,7 +2705,8 @@ function drawHead(t) {
   if (!t.row) return;
   const n = t.takes.filter(k => k.started).length, pend = t.takes.length > n;
   const no = tracks.indexOf(t) + 1; t.name = 'Track ' + no;                 // tracks are numbered by their place, not named
-  $('.tname b', t.row).textContent = no; $('.tno', t.row).textContent = no;
+  $('.tname b', t.row).textContent = no; $('.tno', t.row).textContent = no + (!isFree() && trackBars(t) !== st.bars ? ' · ' + trackBars(t) + (trackBars(t) === 1 ? ' bar' : ' bars') : '');
+  t.row.classList.toggle('lenok', !t.takes.length && !isFree());
   const queued = (recInto(t) && running && heardPos() < rec.k * rec.len) || (defining && defineInto === t.id);
   const into = recInto(t) && !queued;
   $('.tname small', t.row).textContent = pend || into || (defining && defineInto === t.id) ? (rec && rec.cont && recInto(t) ? 'auto' : 'recording') : queued ? (rec && rec.cont ? 'auto' : 'next lap') : armedId === t.id ? 'armed' : t.solo ? 'solo' : isSmp(t) ? (!t.sample ? 'no sample' : pitchTxt(t) || (t.sample.det != null || t.sample.adj ? midiName(sRoot(t)) : 'sample')) + (n ? ', ' + n + (n > 1 ? ' laps' : ' lap') : '') : !n ? 'empty' : pitchTxt(t) || (n > 1 ? n + ' takes' : '');
@@ -3730,6 +3741,13 @@ function tuneCard(t) {
     sliderRow('Amount', 0, 1, 0.01, t.tAmt, 1, pct, v => { if (t.tAmt !== v) { t.tAmt = v; pitchChanged(t); } }),
     el('p', 'cnote', 'The key is what you hear, after any transposing. Speed is how fast a note is pulled in: hard gives the robotic effect, slower keeps vibrato and slides. Penta is the major pentatonic; for minor pentatonic choose its relative major (A minor: C).'));
 }
+function stepTrackBars(t, d) {
+  if (t.takes.length || isFree()) return;
+  const L0 = st.bars, cur = trackBars(t);
+  let b = d > 0 ? (cur >= L0 ? cur + L0 : cur * 2) : (cur > L0 ? cur - L0 : cur % 2 === 0 ? cur / 2 : cur);
+  if (b === cur) { toast(cur + (cur === 1 ? ' bar' : ' bars') + ' is as short as it goes.'); return; }
+  touched(t); setTrackBars(t, b, () => {}); drawHead(t); refreshPane(t);
+}
 function setTrackBars(t, b, show) {
   if (t.takes.length) return;
   b = clamp(b, 1, 32); t.bars = b === st.bars ? null : b;
@@ -4331,7 +4349,12 @@ function stateText(s) {
   return { stop: 'Stopped', count: 'Counting in', countrec: 'Count-in, then into ' + to, armed: 'Next lap into ' + to,
     rec: 'Recording into ' + to, reclast: 'Finishing: last lap into ' + to, play: 'Playing', meas: 'Measuring latency', define: 'Recording the loop', sample: 'Recording a sample' }[s];
 }
-const locked = () => allTakes().length > 0 || trash.some(it => it.take || it.track.takes.length);
+const locked = () => allTakes().length > 0;          // only recordings in use; removed ones waiting in the undo bar do not count
+const trashHasRec = it => it.take ? true : it.clear ? it.takes.length > 0 : !!(it.track && it.track.takes.length);
+function dropTrashRec() {                            // the loop changed: removed recordings can no longer be brought back
+  const n = trash.length; trash = trash.filter(it => !trashHasRec(it));
+  if (trash.length !== n) { drawTrash(); toast('The loop changed, so the removed recordings can no longer be brought back.'); }
+}
 function ui() {
   const s = stateNow(); lastState = s;
   $('#stateText').textContent = stateText(s);
@@ -4630,7 +4653,8 @@ $('#tapBtn').addEventListener('pointerdown', () => {
 /* beats per bar and bars per lap: fixed while there are recordings */
 function setBarsBeats(fn) {
   if (locked()) return;
-  fn(); save(); L = loopFrames(); buildRuler(); if (ctx) applyGlobalFx(); ui(); markDirty();
+  fn(); save(); dropTrashRec(); L = loopFrames(); buildRuler(); if (ctx) applyGlobalFx(); ui(); markDirty();
+  for (const t of tracks) drawHead(t);
   if (running) { stop(); start(false); }
 }
 for (const b of document.querySelectorAll('#beatsStep .sbtn')) hold(b, () => setBarsBeats(() => { st.beats = clamp(st.beats + +b.dataset.d, 1, 32); drawAcc(); }));
@@ -4638,7 +4662,7 @@ for (const b of document.querySelectorAll('#barsStep .sbtn')) hold(b, () => setB
 function drawLenSeg() {
   seg($('#lenSeg'), [['bars', 'Bars'], ['free', 'Free']], () => st.lenMode, v => {
     if (locked()) { toast('Start a new project to change this.'); drawLenSeg(); return; }
-    stop(); st.lenMode = v; freeL = 0; save(); L = loopFrames(); buildRuler(); for (const t of tracks) drawLane(t); renderPane(); ui();
+    stop(); st.lenMode = v; freeL = 0; save(); dropTrashRec(); L = loopFrames(); buildRuler(); for (const t of tracks) drawLane(t); renderPane(); ui();
   }, 'bars');
 }
 drawLenSeg(); drawAcc();
