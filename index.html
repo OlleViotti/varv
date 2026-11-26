@@ -625,7 +625,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 26 Nov 15:00</p>
+  <p class="ver">Varv one, build 26 Nov 15:10</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -733,7 +733,7 @@ const len0Of = k => k.len0 || k.len;
 const takeBars = k => Math.max(1, Math.round(len0Of(k) / (st.beats * 60 / (k.bpm0 || st.bpm) * sr)));
 const loopFrames = () => isFree() ? freeL : barsLen(st.bars);
 const trackBars = t => t.bars || st.bars;
-const FMULS = [0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8];   // free mode: a track's length in loops (the first recording sets one loop)
+const FMULS = [1/64, 1/32, 1/16, 1/8, 1/4, 1/2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 24, 28, 32, 40, 48, 56, 64];   // free mode: a track's length in loops (the first recording sets one loop)
 const trackLen = t => isFree() ? Math.round(freeL * (t.fmul || 1)) : barsLen(trackBars(t));
 const echoSec = () => clamp(st.echoDiv === 'free' ? st.echoMs / 1000 : st.echoDiv * 60 / st.bpm, 0.02, 2.9);
 const bq = (type, f) => { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = 0.9; return b; };
@@ -929,12 +929,12 @@ registerProcessor('varv-guards',GN)`;
   inHP.connect(inG); inG.connect(capNode);
 }
 
-/* The capture ring holds the longest lap of any track twice over (a lap is read back once it has passed, and Capture
-   last needs the one before), so a track longer than the loop is not cut short at its start. When it grows, what is
+/* The capture ring holds the loop twice (Capture last needs the lap before) and the longest lap of any track once
+   (a lap is read back once it has passed), so a track longer than the loop is not cut short at its start. When it grows, what is
    in it is kept. */
 function ensureRing(min) {
   let Lmax = L; for (const t of tracks) if (!isFree() || freeL) Lmax = Math.max(Lmax, trackLen(t));
-  const need = Math.max(12 * sr, 2 * Lmax + 4 * sr + MAXLAT, min || 0) | 0;
+  const need = Math.max(12 * sr, 2 * L + 4 * sr + MAXLAT, Lmax + 4 * sr + MAXLAT, min || 0) | 0;   // the loop twice (for Capture last), the longest lap once
   if (ring && R >= need) return;
   if (!ring) { ring = new Float32Array(need); R = need; capFirst = -1; return; }
   const old = ring, oR = R, from = Math.max(capFirst, capEnd - oR, 0), n = capEnd - from;
@@ -2716,7 +2716,7 @@ function drawHead(t) {
   if (!t.row) return;
   const n = t.takes.filter(k => k.started).length, pend = t.takes.length > n;
   const no = tracks.indexOf(t) + 1; t.name = 'Track ' + no;                 // tracks are numbered by their place, not named
-  const fm = t.fmul || 1, fmTxt = fm === 0.25 ? '¼ loop' : fm === 0.5 ? '½ loop' : fm + ' loops';
+  const fm = t.fmul || 1, fmTxt = '×' + (fm < 1 ? '1/' + Math.round(1 / fm) : fm);
   $('.tname b', t.row).textContent = no; $('.tno', t.row).textContent = no + (isFree() ? (fm !== 1 ? ' · ' + fmTxt : '') : trackBars(t) !== st.bars ? ' · ' + trackBars(t) + (trackBars(t) === 1 ? ' bar' : ' bars') : '');
   t.row.classList.toggle('lenok', !t.takes.length && (!isFree() || !!freeL));
   const queued = (recInto(t) && running && heardPos() < rec.k * rec.len) || (defining && defineInto === t.id);
@@ -3789,10 +3789,10 @@ function tuneCard(t) {
 }
 function stepTrackBars(t, d) {
   if (t.takes.length) return;
-  if (isFree()) {                                    // free: ¼, ½, 1, 2, 3 … 8 loops
+  if (isFree()) {                                    // free: ×1/64 … ×½, ×1, ×2, ×3 … ×64 of the first loop
     if (!freeL) { toast('Record the first loop, then set other tracks in loops of it.'); return; }
-    const i = FMULS.indexOf(t.fmul || 1), j = clamp((i < 0 ? 2 : i) + d, 0, FMULS.length - 1);
-    if (FMULS[j] === (t.fmul || 1)) { toast(d < 0 ? 'A quarter loop is as short as it goes.' : '8 loops is as long as it goes.'); return; }
+    const i = FMULS.indexOf(t.fmul || 1), j = clamp((i < 0 ? 6 : i) + d, 0, FMULS.length - 1);
+    if (FMULS[j] === (t.fmul || 1)) { toast(d < 0 ? '×1/64 is as short as it goes.' : '×64 is as long as it goes.'); return; }
     t.fmul = FMULS[j]; touched(t); if (ctx) ensureRing();
     if (rec && rec.tid === t.id) { const p = heardPos(); if (p < rec.k * rec.len) { rec.len = trackLen(t); rec.k = Math.max(0, Math.ceil(Math.max(p, 0) / rec.len)); } }
     drawHead(t); drawLane(t); refreshPane(t); markDirty(); ui(); return;
