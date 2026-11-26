@@ -625,7 +625,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 26 Nov 15:10</p>
+  <p class="ver">Varv one, build 26 Nov 15:40</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -1272,17 +1272,33 @@ function fillRaw(k) {
 /* Builds the take's loop from the raw recording, shifted by the take's latency.
    The seam sits PRE before the downbeat so an early hit on the one is kept whole,
    and XF crossfades the seam. Two consecutive laps then sum to exactly the original. */
+/* A microphone take as one lap, from its raw recording: its latency (and, on the first free loop, its trim) taken
+   off, the seam crossfaded. Before reverse, tempo and the track's edits. */
+function takeLoop(k) {
+  const N = len0Of(k), out = new Float32Array(N);
+  const d = Math.max(0, clamp(latN(k.lat), 0, MAXLAT) + (k.trim || 0)), raw = k.raw, filled = k.filled;   // trim: the first free loop, trimmed by hand
+  for (let i = 0; i < N + XF; i++) {
+    const ri = d + i; if (ri >= filled) break;
+    const w = i < XF ? i / XF : i >= N ? 1 - (i - N) / XF : 1;
+    let pos = i - PRE; if (pos < 0) pos += N; else if (pos >= N) pos -= N;
+    out[pos] += w * raw[ri];
+  }
+  return out;
+}
+/* Erasers: parts of a take made silent, [start, end] in the lap, each edge faded over 5 ms so it does not click. */
+const ERASE_F = () => Math.round(0.005 * sr);
+function eraseIn(x, list) {
+  if (!list || !list.length) return;
+  const N = x.length, F = ERASE_F();
+  for (const [a, b] of list) for (let i = a - F; i < b + F; i++) {
+    const g = i < a ? (a - i) / F : i >= b ? (i - b + 1) / F : 0;
+    x[((i % N) + N) % N] *= Math.min(1, g);
+  }
+}
 function render(k) {
   const N0 = len0Of(k); let out = k.notes ? renderNotes(k) : new Float32Array(N0);
   if (!k.notes) {
-    const d = Math.max(0, clamp(latN(k.lat), 0, MAXLAT) + (k.trim || 0)), raw = k.raw, filled = k.filled;   // trim: the first free loop, trimmed by hand
-    const N = N0;
-    for (let i = 0; i < N + XF; i++) {
-      const ri = d + i; if (ri >= filled) break;
-      const w = i < XF ? i / XF : i >= N ? 1 - (i - N) / XF : 1;
-      let pos = i - PRE; if (pos < 0) pos += N; else if (pos >= N) pos -= N;
-      out[pos] += w * raw[ri];
-    }
+    out = takeLoop(k); eraseIn(out, k.erase);
     if (k.reverse) out.reverse();
     if (k.len !== N0) out = stretchLen(out, k.len);       // another tempo: slowed or sped up here, its pitch put back below
     out = tricks(k.track, out);
@@ -3211,10 +3227,10 @@ function trackPane(t) {
   };
   const srcPage = () => {
       if (smp) { const cp = el('button', 'cr act'); cp.append(el('span', '', 'New track with this sample')); cp.firstChild.append(el('small', '', 'Same sample and all track settings, without the laps.')); cp.addEventListener('click', () => copySampler(t)); return [...sampleMain(t), el('h3', '', 'Sample library'), libSaveCard(t), card(cp)]; }
-      if (mic.length && loopTrimOK()) return [...loopTrimCards(t), card(...mic.filter(k => k.raw && k.filled).map(k => { const b = el('button', 'cr act'); b.append(el('span', '', 'New sampler track from take ' + (t.takes.indexOf(k) + 1))); b.addEventListener('click', () => samplerFromTake(t, k)); return b; }))];
+      if (mic.length && loopTrimOK()) return [...loopTrimCards(t), ...eraserCards(t), card(...mic.filter(k => k.raw && k.filled).map(k => { const b = el('button', 'cr act'); b.append(el('span', '', 'New sampler track from take ' + (t.takes.indexOf(k) + 1))); b.addEventListener('click', () => samplerFromTake(t, k)); return b; }))];
       if (mic.length) {                               // as New track with this sample on a sampler: a new sampler track from one of the takes
         const ks2 = mic.filter(k => k.raw && k.filled).map(k => [k, t.takes.indexOf(k) + 1]).reverse();
-        return [card(el('p', 'cnote', 'A microphone track has no sample: its sound is its takes, under Laps.'),
+        return [...eraserCards(t), card(
           ...ks2.map(([k, n]) => { const b = el('button', 'cr act'); b.append(el('span', '', 'New sampler track from take ' + n)); b.firstChild.append(el('small', '', 'The take as recorded becomes the sample of a new track, trimmed to its sound; trim it further there.')); b.addEventListener('click', () => samplerFromTake(t, k)); return b; }))];
       }
       return [emptySampleCard(t)];
@@ -3429,7 +3445,7 @@ function fineView(t, key, moved, S) {
       const i0 = Math.floor(a0 + x * per), i1 = Math.floor(a0 + (x + 1) * per); let lo = 0, hi = 0;
       for (let i = Math.max(0, i0); i < Math.min(s.raw.length, Math.max(i0 + 1, i1)); i++) { const v = s.raw[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
       const inside = i0 >= s.a && i0 < s.b;
-      const m = Math.max(hi, -lo); g.fillStyle = inside ? '#ece5d0' : 'rgba(160,168,192,.35)'; g.fillRect(x, h - 4 - m * sc, 1, Math.max(1, m * sc));
+      const m = Math.max(hi, -lo); g.fillStyle = inside ? (S.inside || '#ece5d0') : (S.outside || 'rgba(160,168,192,.35)'); g.fillRect(x, h - 4 - m * sc, 1, Math.max(1, m * sc));
     }
     const ex = Math.round((s[key] - a0) / per);
     g.fillStyle = '#ffb224'; g.fillRect(ex - 1, 0, 3, h); g.fillRect(ex - 6, key === 'a' ? 0 : h - 8, 13, 8);
@@ -3487,6 +3503,63 @@ function compCard(t) {
     res, el('p', 'cnote', 'It looks ahead, so nothing slips through: Attack is how smoothly it pulls down before a loud part, Release how fast it lets go. ' + (s ? 'For a harder attack, use Punch in the envelope. ' : '') + 'Gain adds to or takes away from the level after compressing.'));
 }
 /* A new track with the same sample and all its settings, but none of the laps. */
+/* The Source page of a microphone track: one take at a time (the newest first), its lap drawn as a level, and its
+   erasers. Double-tap the drawing for a new eraser there; drag an eraser's edges, or the eraser itself; each also has
+   close views of its start and end, as a sample's edges, and × to remove it. */
+function eraserCards(t) {
+  const ks = t.takes.filter(k => !k.notes && k.raw && k.filled); if (!ks.length) return [];
+  if (!ks.includes(t.eraseK)) t.eraseK = ks[ks.length - 1];
+  const k = t.eraseK, N = len0Of(k), x = takeLoop(k), list = k.erase || (k.erase = []);
+  const redo = () => { clearTimeout(k.erT); k.erT = setTimeout(() => { k.final = false; markDirty(); }, 150); };
+  const out = [el('h3', '', 'Erasers')];
+  if (ks.length > 1) { const sg = el('div', 'seg full'), r = el('div', 'cr'); seg(sg, ks.map(q => [q, 'Take ' + (t.takes.indexOf(q) + 1)]), () => t.eraseK, v => { t.eraseK = v; renderPane(); }, ks[ks.length - 1]); r.append(sg); out.push(card(r)); }
+  const wrap = el('div', 'trimw'), cv = el('canvas', 'trimc'), lab = el('output'); wrap.append(cv, lab);
+  let W = 0, act = null, lastTap = 0;
+  const fx = i => i / N * W, xi = px => Math.round(clamp(px / W, 0, 1) * N), MIN = Math.round(0.01 * sr);
+  function draw() {
+    const { g, w, h } = sizeCanvas(cv); W = w; if (!w) return;
+    const pk = new Float32Array(w); let top = 1e-4;
+    for (let p = 0; p < w; p++) { const a = Math.floor(p / w * N), e = Math.max(a + 1, Math.floor((p + 1) / w * N)); let m = 0; for (let i = a; i < e; i++) { const v = Math.abs(x[i]); if (v > m) m = v; } pk[p] = m; if (m > top) top = m; }
+    const inE = p => list.some(([a, b]) => p >= fx(a) && p <= fx(b));
+    for (let p = 0; p < w; p++) { const hh = Math.max(0.6, pk[p] / top * (h - 16)); g.fillStyle = inE(p) ? 'rgba(255,95,110,.35)' : '#ece5d0'; g.fillRect(p, h - 4 - hh, 1, hh); }
+    for (const [a, b] of list) {
+      g.fillStyle = 'rgba(255,61,87,.16)'; g.fillRect(fx(a), 0, fx(b) - fx(a), h);
+      g.fillStyle = '#ff5f6e'; for (const p of [fx(a), fx(b)]) { g.fillRect(Math.round(p) - 1, 0, 3, h); g.fillRect(Math.round(p) - 6, 0, 13, 10); }
+    }
+    lab.textContent = list.length ? list.length + (list.length === 1 ? ' eraser' : ' erasers') + ' on take ' + (t.takes.indexOf(k) + 1) + '. Drag an edge or a whole eraser; double-tap for another.' : 'Double-tap the waveform where a part should be silent.';
+  }
+  const px = e => e.clientX - cv.getBoundingClientRect().left;
+  cv.addEventListener('pointerdown', e => {
+    const p = px(e), now = performance.now();
+    if (now - lastTap < 320) { lastTap = 0; const c = xi(p), hw = Math.round(0.1 * sr); list.push([clamp(c - hw, 0, N - MIN), clamp(c + hw, MIN, N)]); list.sort((u, v) => u[0] - v[0]); redo(); renderPane(); return; }
+    lastTap = now; act = null;
+    let best = 16;
+    list.forEach((r, j) => { for (const e2 of [0, 1]) { const dd = Math.abs(p - fx(r[e2])); if (dd < best) { best = dd; act = { j, e: e2 }; } } });
+    if (!act) { const j = list.findIndex(([a, b]) => p >= fx(a) && p <= fx(b)); if (j >= 0) act = { j, move: xi(p) - list[j][0] }; }
+    if (act) try { cv.setPointerCapture(e.pointerId); } catch (er) {}
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!act) return;
+    const r = list[act.j], i = xi(px(e));
+    if (act.move != null) { const len = r[1] - r[0]; r[0] = clamp(i - act.move, 0, N - len); r[1] = r[0] + len; }
+    else if (act.e === 0) r[0] = clamp(i, 0, r[1] - MIN); else r[1] = clamp(i, r[0] + MIN, N);
+    draw();
+  });
+  const up = () => { if (!act) return; act = null; redo(); renderPane(); };
+  cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+  wrap.draw = draw; requestAnimationFrame(draw);
+  out.push(card(wrap));
+  list.forEach((r, j) => {                           // each eraser: its two edges up close, and remove
+    const o = { raw: x, get a() { return r[0]; }, set a(v) { r[0] = v; }, get b() { return r[1]; }, set b(v) { r[1] = v; } };
+    const S = { obj: o, edited: () => redo(), auto: () => [r[0], r[1]], inside: 'rgba(255,95,110,.45)', outside: '#ece5d0' };   // the erased part in red
+    const fa = fineView(t, 'a', () => draw(), S), fb = fineView(t, 'b', () => draw(), S), fine = el('div', 'finew'); fine.append(fa, fb);
+    const del = el('button', 'tbtn danger', 'Remove'); del.addEventListener('click', () => { list.splice(j, 1); redo(); renderPane(); });
+    const hd = el('div', 'cr'); hd.append(el('span', '', 'Eraser ' + (j + 1) + ' · ' + ((r[1] - r[0]) / sr).toFixed(2) + ' s'), del);
+    out.push(card(hd, fine));
+  });
+  out.push(el('p', 'cnote', 'An eraser makes a part of this take silent, with a 5 ms fade at each edge. It belongs to the take, not the track.'));
+  return out;
+}
 /* Free mode: the first loop, while it is the only recording, can be trimmed at both ends like a sample, to make the
    loop exactly right. Its start and end are moved in the recording as made (with a little before and after it), and
    the loop length follows. Double-tap for the loop as recorded. */
@@ -4264,7 +4337,7 @@ async function saveProject() {
         if (k.notes) return { key: k.key, lat: k.lat, off: !!k.off, pin: !!k.pin, solo: !!k.solo, bars: isFree() ? null : takeBars(k), bpm0: k.bpm0 || st.bpm, notes: k.notes.map(e => [e.A - k.rawStart, e.n, e.O == null ? null : e.O - k.rawStart]) };
         keep.add(k.key);
         if (k.savedTo !== pid) { puts.push([pid + '/' + k.key, k.raw.slice(0, k.filled)]); k.savedTo = pid; }
-        return { key: k.key, lat: k.lat, off: !!k.off, pin: !!k.pin, solo: !!k.solo, od: !!k.od, reverse: k.reverse, norm: k.norm, bars: isFree() ? null : takeBars(k), bpm0: k.bpm0 || st.bpm, trim: k.trim || 0, trimLen0: k.trimLen0 || null };
+        return { key: k.key, lat: k.lat, off: !!k.off, pin: !!k.pin, solo: !!k.solo, od: !!k.od, reverse: k.reverse, norm: k.norm, bars: isFree() ? null : takeBars(k), bpm0: k.bpm0 || st.bpm, trim: k.trim || 0, trimLen0: k.trimLen0 || null, erase: k.erase && k.erase.length ? k.erase : null };
       }) })) };
   const prev = saving;
   const job = (async () => {
@@ -4355,7 +4428,7 @@ async function openProject(id) {
       if (!raw || (isFree() && !freeL)) { missing++; continue; }
       if (!same) raw = resample(raw, ratio);
       const nb = km.bars || tm.bars || meta.bars, b0 = km.bpm0 || meta.bpm, len = isFree() ? Math.round(freeL * (tm.fmul || 1)) : barsLen(nb), len0 = isFree() ? Math.round(freeL * (tm.fmul || 1)) : Math.round(nb * st.beats * 60 / b0 * sr);
-      const k = { id: ++uid, key: km.key, k: -1, len, len0, bpm0: b0, run: -1, F0: 0, rawStart: 0, raw, filled: raw.length, lat: km.lat, trim: km.trim || 0, trimLen0: km.trimLen0 || null, off: !!km.off, pin: !!km.pin, solo: !!km.solo, od: !!km.od, reverse: !!km.reverse,
+      const k = { id: ++uid, key: km.key, k: -1, len, len0, bpm0: b0, run: -1, F0: 0, rawStart: 0, raw, filled: raw.length, lat: km.lat, trim: km.trim || 0, trimLen0: km.trimLen0 || null, erase: km.erase || null, off: !!km.off, pin: !!km.pin, solo: !!km.solo, od: !!km.od, reverse: !!km.reverse,
         norm: km.norm == null ? null : km.norm, peak: 0, peaks: null, buf: null, src: null, tg: null,
         final: true, started: true, full: true, auto: false, track: t, savedTo: same ? id : null };
       render(k); t.takes.push(k); attachTake(k);
