@@ -625,7 +625,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 26 Nov 15:40</p>
+  <p class="ver">Varv one, build 27 Nov 08:40</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -684,6 +684,7 @@ Object.defineProperty(MT, 'xyMap', { get: () => st.mXyMap || XY_DEF, set: v => {
 const prof = () => st.profiles[st.active];
 
 /* ---------- audio engine ---------- */
+let muteG = null, spkRec = false, spkEndAt = 0;
 let ctx = null, sr = 48000, limiter, comp, clickComp, outGain, pre, gLP, gHP, mEq, mix, echoIn, echoDelay, echoFbG, echoOut, conv, revIn, revOut, gEchoSend, gRevSend, clickGain;
 let inHP = null, inG = null, mAn = null, mbuf = null, clipIn = 0, clipOut = 0;
 const dbLin = db => Math.pow(10, db / 20);
@@ -817,6 +818,7 @@ function buildGraph() {
   comp = ctx.createDynamicsCompressor(); comp.knee.value = 12; comp.attack.value = 0.01; comp.release.value = 0.2; comp.connect(limiter);
   clickComp = ctx.createDynamicsCompressor(); clickComp.threshold.value = 0; clickComp.knee.value = 0; clickComp.ratio.value = 1; clickComp.connect(limiter);
   outGain = gn(st.master); outGain.connect(comp);
+  muteG = gn(spkRec ? 0 : 1); comp.disconnect(); clickComp.disconnect(); comp.connect(muteG); clickComp.connect(muteG); muteG.connect(limiter);   // muteG: silent while recording in speaker mode
   gLP = bq('lowpass', OPEN_LP); gHP = bq('highpass', 10); mEq = mkEq(); pre = gn(1);
   pre.connect(gLP); gLP.connect(gHP); gHP.connect(mEq[0]);
   MT.fxIn = gn(1); MT.fxOut = gn(1); MT.sum = gn(1); MT.out = MT.fxOut; MT.fx = {}; MT.fxOrder = '';   // the master's live tricks, built when used
@@ -985,9 +987,31 @@ function closeMic() {
   if (micSrc) { try { micSrc.disconnect(); } catch (e) {} micSrc = null; }
   micOK = false; micLabel = '';
 }
+/* In speaker mode the microphone is opened just for a recording that needs it (audio or a sample), and the sound
+   is silent meanwhile (playing through the earpiece would only be heard in the recording). Afterwards the
+   microphone is closed again and the sound goes back to the speaker. */
+async function needMic() {
+  if (micOK) return true;
+  if (!st.spk || !ctx) return false;
+  spkRec = true; spkEndAt = 0; if (muteG) sp(muteG.gain, 0, 0.01);
+  try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch (e) {}
+  const ok = await openMic(wantsBuiltin() ? '' : st.micId, true);
+  if (!ok) { spkDone(); return false; }
+  alog('speaker mode: microphone on for a recording, sound silent'); toast('Speaker mode: the microphone is on for this recording; the sound is silent meanwhile.');
+  return true;
+}
+function spkDone() {
+  if (!spkRec) return;
+  spkRec = false; closeMic();
+  try { if (navigator.audioSession) { navigator.audioSession.type = 'playback'; navigator.audioSession.type = 'auto'; } } catch (e) {}
+  if (ctx) ctx.resume().catch(() => {});
+  if (muteG) sp(muteG.gain, 1, 0.05);
+  alog('speaker mode: recording done, microphone off'); diag(); ui();
+}
 async function setSpeaker(on) {
   st.spk = on; save();
   if (on) {
+    spkRec = false; if (muteG) sp(muteG.gain, 1, 0.05);
     closeMic();
     try { if (navigator.audioSession) { navigator.audioSession.type = 'playback'; navigator.audioSession.type = 'auto'; } } catch (e) {}
     alog('speaker mode: microphone off');
@@ -1170,7 +1194,7 @@ function finishRec(p) {
   if (p < rec.k * rec.len && inTail(p)) { rec = null; toast('Recording finished.'); return; }
   rec.last = !rec.last;
 }
-const noMicMsg = () => st.spk ? 'Speaker is on (under Audio, Output), so the microphone is off. Switch it off to record from the microphone.' : 'The microphone is not running, so nothing can be recorded.';
+const noMicMsg = () => st.spk ? 'The microphone could not be turned on for the recording.' : 'The microphone is not running, so nothing can be recorded.';
 const nextIsSmp = () => { const r = plan(0), t = tracks.find(x => x.id === r.tid); return !!(t && t.sample); };   // a sampler records what is played on the screen, without the microphone
 async function toggleRec() {
   if (srec) { stopSampleRec(); return; }
@@ -1179,10 +1203,10 @@ async function toggleRec() {
   if (isFree() && !freeL) { if (defining) endDefine(); else beginDefine(); return; }
   if (!running) {
     if (!(await start(st.countIn !== false))) return;
-    if (!micOK && !nextIsSmp()) { toast(noMicMsg()); return; }
+    if (!micOK && !nextIsSmp() && !(await needMic())) { toast(noMicMsg()); return; }
     rec = plan(isFree() ? L : 0); ui(); return;            // free mode: hear the loop once, then record
   }
-  if (!micOK && !nextIsSmp()) { toast(noMicMsg()); return; }
+  if (!micOK && !nextIsSmp() && !(await needMic())) { toast(noMicMsg()); return; }
   const p = heardPos();
   if (rec) {
     if (p < rec.k * rec.len && !inTail(p)) rec = null;                     // was waiting: cancel
@@ -1239,7 +1263,7 @@ function addTake(r, auto, lat) {
    Nothing is playing yet, so there is no output latency to correct and the take is not shifted. */
 async function beginDefine() {
   const ok = await initAudio(); if (!ok) return;
-  if (!micOK) { toast(noMicMsg()); return; }
+  if (!micOK && !(await needMic())) { toast(noMicMsg()); return; }
   if (running) stop();
   L = 0; ensureRing(Math.round((2 * FREE_MAX_S + 6) * sr));
   defining = { T0: nowF() }; wake(true); ui();
@@ -1962,11 +1986,11 @@ function findLoop(y, from, user) {
   if (user) { lo = Math.round(0.01 * sr); hi = n - Math.round(0.01 * sr); }
   if (hi - lo < Math.round(0.05 * sr)) return null;
   const per = loopPeriod(y, lo, hi), room = hi - lo, snap = L => per ? Math.max(per, Math.round(L / per) * per) : L;
-  let L = user ? snap(Math.round((user[1] - user[0]) * n)) : snap(Math.min(Math.round(0.25 * sr), Math.round(room * 0.5)));
+  let L = user ? snap(Math.round((user[1] - user[0]) * n)) : snap(Math.min(Math.round(0.5 * sr), Math.round(room * 0.5)));   // about half a second, at most half the strong part
   while (L > room - 64 && per && L > per) L -= per;
   if (L > room - 64) L = room - 64;
   if (L < Math.round(0.02 * sr)) return null;
-  const X = Math.max(32, Math.min(Math.round(0.015 * sr), L >> 2)), M = Math.min(X, 256);
+  const X = Math.max(32, Math.min(Math.round(0.08 * sr), Math.round(L / 3))), M = Math.min(X, 1024);   // the crossfade: up to 80 ms, a third of the loop
   let s0 = Math.max(lo, X), s1 = hi - L;
   if (user) { const c = clamp(Math.round(user[0] * n), s0, s1), d = per || Math.round(0.005 * sr); s0 = Math.max(s0, c - d); s1 = Math.min(s1, c + d); }
   if (s1 < s0) return null;
@@ -1981,9 +2005,19 @@ function findLoop(y, from, user) {
   }
   return { s: bs, e: bs + L, x: X, per };
 }
+/* The loop made seamless: its level is held steady (so going round does not pulse), and its last part is crossfaded, with smooth (raised cosine) curves, into what comes before its start. */
 function loopBake(y, lp) {
-  const z = y.slice(), { s, e, x } = lp;
-  for (let i = 0; i < x; i++) { const w = i / x; z[e - x + i] = y[e - x + i] * (1 - w) + y[s - x + i] * w; }
+  const z = y.slice(), { s, e, x } = lp, L = e - s;
+  /* the level over the loop, in 10 ms steps, smoothed over about 60 ms; each moment is brought most of the way
+     (80 %) to the level at the loop's start, like a slow compressor on the loop alone, so a fading or swelling tone
+     holds steady when it goes round. At the start the gain is 1, so it joins what comes before. */
+  const hop = Math.max(16, Math.round(0.01 * sr)), nb = Math.ceil(L / hop) + 1, lv = new Float32Array(nb);
+  for (let b = 0; b < nb; b++) { let q = 0, c = 0; for (let i = s + b * hop - hop; i < s + b * hop + hop; i++) if (i >= 0 && i < y.length) { q += y[i] * y[i]; c++; } lv[b] = Math.sqrt(q / Math.max(1, c)); }
+  const sm = new Float32Array(nb); for (let b = 0; b < nb; b++) { let q = 0, c = 0; for (let j = Math.max(0, b - 3); j <= Math.min(nb - 1, b + 3); j++) { q += lv[j]; c++; } sm[b] = q / c; }
+  const ref = sm[0] + 1e-9, gOf = b => clamp(Math.pow(ref / (sm[clamp(b, 0, nb - 1)] + 1e-9), 0.8), 0.4, 2.5);
+  const g0 = gOf(0);
+  for (let i = s; i < e; i++) { const p = (i - s) / hop, b = Math.floor(p), f = p - b; z[i] = y[i] * ((gOf(b) * (1 - f) + gOf(b + 1) * f) / g0); }
+  for (let i = 0; i < x; i++) { const w = 0.5 - 0.5 * Math.cos(Math.PI * i / x); z[e - x + i] = z[e - x + i] * (1 - w) + y[s - x + i] * w; }
   return z;
 }
 function envChanged(t) {
@@ -2046,7 +2080,7 @@ async function sampleRec(t) {
   if (srec) { if (srec.tid === t.id) stopSampleRec(); return; }
   if (measuring || defining) return;
   const ok = await initAudio(); if (!ok) return;
-  if (!micOK) { toast(noMicMsg()); return; }
+  if (!micOK && !(await needMic())) { toast(noMicMsg()); return; }
   ensureRing();
   srec = { tid: t.id, F: nowF() - Math.round(0.03 * sr) };
   refreshPane(t); if (padT === t) drawPads(); drawHead(t); ui();
@@ -2618,7 +2652,7 @@ async function recordInto(t, od) {          // od: overdub, on top of what the t
   if (isFree() && !freeL) { if (defining) return; defineInto = t.id; beginDefine(); return; }
   if (!running) {
     if (!(await start(true))) return;
-    if (!micOK && !t.sample) { toast(noMicMsg()); return; }
+    if (!micOK && !t.sample && !(await needMic())) { toast(noMicMsg()); return; }
     rec = { tid: t.id, len: trackLen(t), k: isFree() ? 1 : 0, cont: false, last: false, stay: true, od: !!od }; ui(); return;
   }
   const p = heardPos();
@@ -4157,6 +4191,8 @@ function meters() {
 function frame() {
   requestAnimationFrame(frame);
   if (!ctx) return;
+  if (spkRec && !rec && !srec && !defining && !measuring) { if (!spkEndAt) spkEndAt = performance.now(); else if (performance.now() - spkEndAt > 1500) spkDone(); }   // the recording is over and its end captured
+  else spkEndAt = 0;
   meters();
   if (defining) { $('#pos').textContent = ((nowF() - defining.T0) / sr).toFixed(1); return; }
   if (!running) { markCount = null; if (lastBeat !== -2) { setBeat(-2); $('#pos').textContent = '–'; lapRing(-1); } return; }
@@ -4619,8 +4655,8 @@ async function drawAudio() {
     el('p', 'cnote', (micOK ? 'In use: ' + (micLabel || 'unknown') + '. ' : st.spk ? 'Off while Speaker (under Output) is on. ' : 'The microphone is not running. ') + 'Set the gain so loud hits reach the amber part of the meter; red means clipping.')));
   // output
   const oc = [crow('Speaker', swtch(el('div'), () => !!st.spk, v => setSpeaker(v), false)),
-    el('p', 'cnote' + (st.spk ? ' warn' : ''), st.spk ? 'The microphone is off while Speaker is on: nothing can be recorded from it. Sampler tracks still record what you play on the screen.'
-      : 'For playing a project out loud. While the microphone is on, an iPhone plays only to the earpiece or to headphones with a microphone (AirPods), as in a phone call. Speaker turns the microphone off, so the sound can go to the loudspeaker, a Bluetooth speaker or AirPlay. The microphone does not work while it is on.')];
+    el('p', 'cnote' + (st.spk ? ' warn' : ''), st.spk ? 'The microphone is off while Speaker is on. A recording that needs it (audio or a sample) turns it on just for that recording, with the sound silent meanwhile; then the sound goes back to the speaker.'
+      : 'For playing a project out loud. While the microphone is on, an iPhone plays only to the earpiece or to headphones with a microphone (AirPods), as in a phone call. Speaker keeps the microphone off, so the sound can go to the loudspeaker, a Bluetooth speaker or AirPlay; it is turned on only while you record, with the sound silent meanwhile.')];
   const tt = el('button', 'cr act'); tt.append(el('span', '', 'Play a test sound')); tt.addEventListener('click', testTone);
   host.append(el('h3', '', 'Output'), card(...oc, mrow('Out', 'aOut'), tt));
 }
