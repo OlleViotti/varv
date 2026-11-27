@@ -56,7 +56,7 @@ The top of the screen is a thin strip with the in meter on the left and the out 
 
 - **Bars.** Tempo 40 to 240 bpm with tap tempo, 1 to 16 beats per bar and 1 to 32 bars per lap, with a click and a one-bar count-in.
 - **Bars per track.** In Edit each track can have its own number of bars, for example a 4-bar melody over a 1-bar beat. It records on its own boundaries and its strip shows its own bars and playhead. The setting is fixed once the track holds a recording.
-- **Free.** No tempo and no click. The first Record starts at once; play, then tap **End loop** to set the length (up to 30 seconds). Every track then has that length. Since nothing is playing during that first recording, it is not shifted for latency; later recordings are, so they land on the first one.
+- **Free.** No tempo and no click. The first Record starts at once; play, then tap **End loop** to set the length. It runs until you tap End loop, however long that is. Every track then has that length. Since nothing is playing during that first recording, it is not shifted for latency; later recordings are, so they land on the first one.
 
 ## Recording
 

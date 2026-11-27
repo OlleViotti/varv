@@ -625,7 +625,7 @@ body[data-pads] .scenes,body[data-pads] .hintbar{display:none!important}
   <div class="card"><button class="cr act" id="hintReset"><span>Show the guide again</span></button>
     <p class="cnote keys"><kbd>Space</kbd>, <kbd>R</kbd>, <kbd>Enter</kbd> or <kbd>→</kbd> work like the Record button: tap to record, hold to start or stop. <kbd>←</kbd> or <kbd>Backspace</kbd> undo. <kbd>C</kbd> capture last. <kbd>K</kbd> click. <kbd>1</kbd>–<kbd>9</kbd> mute a track, <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> solo it. <kbd>E</kbd> edit, <kbd>S</kbd> settings, <kbd>Esc</kbd> back to play. <kbd>P</kbd> record the performance. A Bluetooth pedal that sends any of the record keys works as a record pedal.</p></div>
   </div>
-  <p class="ver">Varv one, build 27 Nov 08:40</p>
+  <p class="ver">Varv one, build 27 Nov 12:20</p>
 </div></div>
 
 <div class="back" id="backL" aria-label="Back to play"></div>
@@ -645,7 +645,7 @@ const rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(
 
 /* ---------- settings ---------- */
 const KEY = 'varv.settings.1';
-const MAXLAT_MS = 600, PRE_MS = 60, XF_MS = 20, LEAD_S = 0.09, SAFE_S = 0.04, GRACE_S = 0.15, HOLD_MS = 450, FREE_MAX_S = 30;
+const MAXLAT_MS = 600, PRE_MS = 60, XF_MS = 20, LEAD_S = 0.09, SAFE_S = 0.04, GRACE_S = 0.15, HOLD_MS = 450, FREE_MAX_S = 30;   // FREE_MAX_S: what room the first free loop starts with
 const INKS = ['#ece5d0', '#6f9bff', '#45c99f', '#b994ff', '#ff9a5c', '#41c6d6', '#ff74ac'];   // one colour per track, light on the dark panels
 const EQ_DEF = { eqL: 0, eqM: 0, eqH: 0, eqLf: 200, eqMf: 1000, eqHf: 4000 };
 const M_DEF = { mLCrush: 0, mLRing: 0, mLRingF: 0.5, mLTrem: 0, mLTremF: 0.4, mEbrk: 0, mRbrk: 0, mFrz: 0, mPhone: 0, mRadio: 0, mIsoL: 0, mIsoM: 0, mIsoH: 0, mSlice: 0, mSPos: 0, mSLen: 0.5, mRdly: 0, mPing: 0, mPDiv: 0.5, mXyMap: null, mXyHold: false };
@@ -1738,14 +1738,14 @@ function watchdog() {
   }
   if (wdBad >= 6 && pn - wdAt > 120000) {          // only a lasting problem: about 12 seconds in a row, and at most every two minutes
     wdAt = pn; wdBad = 0;
-    toast('The audio runs at the wrong speed (' + rate.toFixed(2) + '×). Tap the meters, then Restart audio.');
+    toast('The audio runs at the wrong speed (' + rate.toFixed(2) + '×). Open Settings › Audio and tap Restart audio.');
   }
 }
 function tick() {
   if (!ctx) return;
   clockSample(); watchdog();
   const now = nowF();
-  if (defining && now - defining.T0 >= FREE_MAX_S * sr) endDefine();
+  if (defining && now - defining.T0 > R - 10 * sr) ensureRing(R + 60 * sr);   // no end of its own: the ring grows (keeping what is in it) for as long as it goes
   if (running && rec && now >= epoch + (rec.k + 1) * rec.len - LEAD_S * sr) {
     const armedBefore = armedId, r = rec, t = addTake(r, r.cont); recTail = { start: r.k * r.len, end: (r.k + 1) * r.len };
     serviceTake(t.takes[t.takes.length - 1], now);                        // judge the lap now: a silent one is dropped, so its track stays first in line
